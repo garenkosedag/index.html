@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CZ Trade Costing Engine</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23c9a55a'/><text x='50%25' y='55%25' dominant-baseline='middle' text-anchor='middle' font-family='sans-serif' font-weight='700' font-size='16' fill='%230a0f1a'>CZ</text></svg>">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.26.5/babel.min.js"></script>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#0a0f1a; }
+  input[type=number]::-webkit-inner-spin-button,
+  input[type=number]::-webkit-outer-spin-button { -webkit-appearance:none; margin:0; }
+  input[type=number] { -moz-appearance:textfield; }
+  select option { background:#111827; color:#e2e8f0; }
+  ::-webkit-scrollbar { width:6px; height:6px; }
+  ::-webkit-scrollbar-track { background:#0a0f1a; }
+  ::-webkit-scrollbar-thumb { background:#2a3a54; border-radius:3px; }
+  ::-webkit-scrollbar-thumb:hover { background:#3a4a64; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useMemo, useCallback, useEffect } = React;
+
+const COST_BUCKETS = [
+  "Origin Haulage","Origin Handling","Export Customs Clearance","Export Documentation",
+  "Port Terminal Charges (Origin)","Ocean Freight","Marine Insurance","Import Customs Clearance",
+  "Import Duty","Import Tariff","Destination Port Charges","Destination Inland Haulage",
+  "Destination Handling","Last Mile Delivery","Warehouse Handling","Storage (per period)",
+  "Inventory Carrying Cost","Pallet / Packaging","Border Charges","Brokerage / Agency",
+  "Inspection / Certification","Miscellaneous Logistics Cost"
+];
+
+const INCOTERMS = ["EXW","FCA","FOB","CIF","DAP","DDP","VMI"];
+
+const BUY_MATRIX = {
+  EXW:[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+  FCA:[1,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+  FOB:[0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+  CIF:[0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+  DAP:[0,0,0,0,0,0,0,0,1,1,0,0,0,0,1,1,1,1,1,1,1,1],
+  DDP:[0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1],
+  VMI:[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+};
+
+const SELL_MATRIX = {
+  EXW:[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+  FCA:[0,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+  FOB:[1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+  CIF:[1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+  DAP:[1,1,1,1,1,1,1,1,0,0,1,1,1,1,0,0,0,0,0,0,0,0],
+  DDP:[1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0],
+  VMI:[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+};
+
+const FINANCING_TYPES = [
+  { id:"own_equity", name:"Own Equity", advanceRate:0, margin:0.12, usesSalePrice:false, isClean:true },
+  { id:"prepayment", name:"Prepayment Finance", advanceRate:0.80, margin:0.0367, usesSalePrice:false, isClean:false },
+  { id:"futures", name:"Futures Financing", advanceRate:0, margin:0.03, usesSalePrice:false, isClean:false },
+  { id:"supply_copy", name:"Supply Finance (Copy Doc)", advanceRate:0.80, margin:0.0226, usesSalePrice:false, isClean:false },
+  { id:"supply_bl", name:"Supply Finance (BL)", advanceRate:0.85, margin:0.0219, usesSalePrice:false, isClean:false },
+  { id:"stock_other", name:"Stock Finance Origin Other", advanceRate:0.85, margin:0.0176, usesSalePrice:false, isClean:false },
+  { id:"stock_brazil", name:"Stock Finance Origin Brazil", advanceRate:0.80, margin:0.0247, usesSalePrice:false, isClean:false },
+  { id:"stock_dest", name:"Stock Finance Destination", advanceRate:0.85, margin:0.0234, usesSalePrice:false, isClean:false },
+  { id:"receivable", name:"Receivable Finance", advanceRate:0.90, margin:0.0228, usesSalePrice:true, isClean:false },
+  { id:"credit_insured", name:"Credit-insured Receivable", advanceRate:0.95, margin:0.0178, usesSalePrice:true, isClean:false },
+];
+
+const DEFAULT_COF = 0.0416;
+const EQUITY_RATE = 0.12;
+const SK = "cz-saved-flows";
+const toClb = (v) => (v / 2204.62) * 100;
+
+const CL = { bg:"#0a0f1a", sf:"#111827", sa:"#1a2234", bd:"#1e2d44", bl:"#2a3a54", ac:"#c9a55a", ad:"rgba(201,165,90,0.15)", tx:"#e2e8f0", td:"#8494a7", tm:"#5a6a7e", gn:"#4ade80", gd:"rgba(74,222,128,0.12)", rd:"#f87171", rdd:"rgba(248,113,113,0.12)", bu:"#60a5fa", bud:"rgba(96,165,250,0.1)", pu:"#a78bfa" };
+const ff = "'DM Sans','Segoe UI',sans-serif";
+const mf = "'JetBrains Mono',monospace";
+
+// Storage helper using localStorage
+const storage = {
+  get(key) { try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : []; } catch(e) { return []; } },
+  set(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch(e) {} }
+};
+
+function Pill({ label, color }) {
+  return <span style={{ display:"inline-block", padding:"4px 12px", borderRadius:20, background:color+"18", color, fontSize:12, fontWeight:600, border:"1px solid "+color+"30" }}>{label}</span>;
+}
+
+function Card({ title, children, accent, right }) {
+  return (
+    <div style={{ background:CL.sf, border:"1px solid "+CL.bd, borderRadius:10, marginBottom:20, overflow:"hidden" }}>
+      {title && <div style={{ padding:"14px 20px", borderBottom:"1px solid "+CL.bd, display:"flex", justifyContent:"space-between", alignItems:"center", background:accent?accent+"08":undefined, borderLeft:accent?"3px solid "+accent:undefined }}><span style={{ fontWeight:600, fontSize:14, color:accent||CL.tx }}>{title}</span>{right}</div>}
+      <div style={{ padding:"16px 20px" }}>{children}</div>
+    </div>
+  );
+}
+
+function InputRow({ label, value, onChange, type, suffix, small, placeholder }) {
+  return (
+    <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10 }}>
+      <label style={{ fontSize:13, color:CL.td, width:small?140:180, flexShrink:0 }}>{label}</label>
+      <div style={{ display:"flex", alignItems:"center", gap:6, flex:1 }}>
+        <input type={type||"text"} value={value} onChange={e => onChange(type==="number"?(parseFloat(e.target.value)||0):e.target.value)} placeholder={placeholder} style={{ background:CL.sa, border:"1px solid "+CL.bd, borderRadius:6, padding:"8px 12px", color:CL.tx, fontFamily:mf, fontSize:13, width:small?100:180, outline:"none" }} />
+        {suffix && <span style={{ fontSize:12, color:CL.tm }}>{suffix}</span>}
+      </div>
+    </div>
+  );
+}
+
+function Stat({ label, value, color }) {
+  return <div style={{ flex:1 }}><div style={{ fontSize:11, color:CL.tm, marginBottom:4, textTransform:"uppercase", letterSpacing:"0.05em" }}>{label}</div><div style={{ fontSize:18, fontWeight:700, color:color||CL.tx, fontFamily:mf }}>{value}</div></div>;
+}
+
+function MiniInput({ label, value, onChange, suffix }) {
+  return <div><div style={{ fontSize:10, color:CL.tm, marginBottom:3, textTransform:"uppercase" }}>{label}</div><div style={{ display:"flex", alignItems:"center", gap:4 }}><input type="number" value={value} onChange={e => onChange(e.target.value)} style={{ width:72, background:CL.sf, border:"1px solid "+CL.bd, borderRadius:5, padding:"5px 8px", color:CL.tx, fontFamily:mf, fontSize:12, textAlign:"right", outline:"none" }} />{suffix && <span style={{ fontSize:10, color:CL.tm }}>{suffix}</span>}</div></div>;
+}
+
+function MiniStat({ label, value, isAccent }) {
+  return <div style={{ flex:1 }}><div style={{ fontSize:10, color:CL.tm, textTransform:"uppercase", letterSpacing:"0.04em" }}>{label}</div><div style={{ fontSize:13, fontWeight:600, color:isAccent?CL.ac:CL.tx, fontFamily:mf, marginTop:2 }}>{value}</div></div>;
+}
+
+function SummaryCard({ label, value }) {
+  return <div style={{ flex:1, minWidth:120, padding:"12px 16px", background:CL.sa, borderRadius:8, border:"1px solid "+CL.bd }}><div style={{ fontSize:10, color:CL.tm, textTransform:"uppercase", letterSpacing:"0.05em" }}>{label}</div><div style={{ fontSize:16, fontWeight:700, marginTop:4, fontFamily:mf }}>{value}</div></div>;
+}
+
+function CostBar({ label, value, total, color }) {
+  const pct = total > 0 ? (value/total)*100 : 0;
+  return <div style={{ marginBottom:12 }}><div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:4 }}><span style={{ color:CL.td }}>{label}</span><span style={{ fontFamily:mf, color:CL.tx }}>{"$"+value.toFixed(2)+" ("+pct.toFixed(1)+"%)"}</span></div><div style={{ height:6, background:CL.sa, borderRadius:3, overflow:"hidden" }}><div style={{ height:"100%", width:Math.min(pct,100)+"%", background:color, borderRadius:3, transition:"width 0.4s ease" }} /></div></div>;
+}
+
+function App() {
+  const [tab, setTab] = useState(0);
+  const [trade, setTrade] = useState({ name:"", commodity:"Sugar", origin:"", destination:"", volume:500, purchasePrice:470, salePrice:535, currency:"USD" });
+  const [buyInco, setBuyInco] = useState("EXW");
+  const [sellInco, setSellInco] = useState("CIF");
+  const [costInputs, setCostInputs] = useState(() => { const m = {}; COST_BUCKETS.forEach(b => { m[b] = { value:0, enabled:true, note:"" }; }); return m; });
+  const [overrides, setOverrides] = useState({});
+  const [stages, setStages] = useState([
+    { typeId:"supply_bl", days:25, advanceRate:null, margin:null, cof:null },
+    { typeId:"stock_dest", days:15, advanceRate:null, margin:null, cof:null },
+    { typeId:"receivable", days:20, advanceRate:null, margin:null, cof:null },
+  ]);
+  const [bankCOF, setBankCOF] = useState(DEFAULT_COF);
+  const [saved, setSaved] = useState(() => storage.get(SK));
+  const [routeAlert, setRouteAlert] = useState(null);
+  const [confirmed, setConfirmed] = useState(false);
+
+  const persistFlows = useCallback((flows) => { storage.set(SK, flows); }, []);
+
+  useEffect(() => {
+    if (!trade.origin.trim() || !trade.destination.trim()) { setRouteAlert(null); return; }
+    const o = trade.origin.trim().toLowerCase(), d = trade.destination.trim().toLowerCase();
+    const m = saved.filter(f => f.origin.toLowerCase() === o && f.destination.toLowerCase() === d);
+    setRouteAlert(m.length > 0 ? m : null);
+  }, [trade.origin, trade.destination, saved]);
+
+  useEffect(() => { setConfirmed(false); }, [trade, buyInco, sellInco, costInputs, stages, bankCOF, overrides]);
+
+  const activeBuckets = useMemo(() => {
+    const bC = BUY_MATRIX[buyInco], sC = SELL_MATRIX[sellInco];
+    return COST_BUCKETS.map((name, i) => {
+      const ma = bC[i] === 1 && sC[i] === 1;
+      const ov = overrides[name];
+      const active = ov !== undefined ? ov : ma;
+      return { name, active, matrixActive: ma, overridden: ov !== undefined && ov !== ma };
+    });
+  }, [buyInco, sellInco, overrides]);
+
+  const toggleOverride = useCallback((name, ma, ca) => {
+    setOverrides(p => { const n = {...p}; const ns = !ca; if (ns === ma) delete n[name]; else n[name] = ns; return n; });
+  }, []);
+  const resetOverrides = useCallback(() => setOverrides({}), []);
+
+  const logTotal = useMemo(() => activeBuckets.reduce((s,b) => b.active && costInputs[b.name]?.enabled ? s + (parseFloat(costInputs[b.name]?.value)||0) : s, 0), [activeBuckets, costInputs]);
+
+  const fin = useMemo(() => {
+    const results = stages.map(s => {
+      const ft = FINANCING_TYPES.find(f => f.id === s.typeId); if (!ft) return null;
+      const ar = s.advanceRate !== null ? s.advanceRate : ft.advanceRate;
+      const mg = s.margin !== null ? s.margin : ft.margin;
+      const cof = s.cof !== null ? s.cof : bankCOF;
+      const base = ft.usesSalePrice ? trade.volume * trade.salePrice : trade.volume * trade.purchasePrice;
+      const bl = base * ar, eq = base * (1 - ar);
+      const air = ft.isClean ? EQUITY_RATE : mg + cof;
+      const bi = bl * air * s.days / 360, ec = eq * EQUITY_RATE * s.days / 360;
+      return { ...s, ft, ar, mg, cof, base, bankLoan:bl, equity:eq, allInRate:air, bankInterest:bi, equityCost:ec, totalCost:bi+ec, days:s.days };
+    }).filter(Boolean);
+    const td = results.reduce((a,r) => a+r.days, 0), tc = results.reduce((a,r) => a+r.totalCost, 0);
+    const aep = td > 0 ? results.reduce((a,r) => a + r.days*(1-r.ar), 0)/td : 0;
+    const ae = td > 0 ? results.reduce((a,r) => a + r.days*r.equity, 0)/td : 0;
+    const cpm = trade.volume > 0 ? tc/trade.volume : 0;
+    return { results, totalDays:td, totalCost:tc, avgEquityPct:aep, avgEquity:ae, costPerMt:cpm };
+  }, [stages, trade, bankCOF]);
+
+  const econ = useMemo(() => {
+    const cc = trade.purchasePrice, lc = logTotal, fc = fin.costPerMt, tc = cc+lc+fc;
+    const mg = trade.salePrice - tc, mp = trade.salePrice > 0 ? mg/trade.salePrice*100 : 0, tp = mg * trade.volume;
+    const roe = fin.avgEquity > 0 && fin.totalDays > 0 ? (tp - fin.totalCost)/fin.avgEquity/fin.totalDays*360*100 : 0;
+    return { cc, lc, fc, tc, mg, mp, tp, roe };
+  }, [trade, logTotal, fin]);
+
+  const updateTrade = useCallback((k,v) => setTrade(p => ({...p,[k]:v})), []);
+  const updateCost = useCallback((n,f,v) => setCostInputs(p => ({...p,[n]:{...p[n],[f]:v}})), []);
+  const addStage = useCallback(() => setStages(p => [...p, {typeId:"own_equity",days:10,advanceRate:null,margin:null,cof:null}]), []);
+  const removeStage = useCallback(i => setStages(p => p.filter((_,x) => x!==i)), []);
+  const updateStage = useCallback((i,f,v) => setStages(p => p.map((s,x) => x===i ? {...s,[f]:v} : s)), []);
+
+  const confirmFlow = useCallback(() => {
+    const flow = { id:Date.now().toString(36)+Math.random().toString(36).slice(2,6), savedAt:new Date().toISOString(), name:trade.name||(trade.commodity+" "+trade.origin+"\u2192"+trade.destination), commodity:trade.commodity, origin:trade.origin, destination:trade.destination, volume:trade.volume, purchasePrice:trade.purchasePrice, salePrice:trade.salePrice, currency:trade.currency, buyInco, sellInco, logisticsTotal:logTotal, financingCostPerMt:fin.costPerMt, totalCost:econ.tc, margin:econ.mg, marginPct:econ.mp, roe:econ.roe, totalProfit:econ.tp, totalDays:fin.totalDays, avgEquityPct:fin.avgEquityPct, stages:stages.map(s => ({...s})), costInputs:Object.fromEntries(activeBuckets.filter(b => b.active).map(b => [b.name,costInputs[b.name]])), overrides:{...overrides} };
+    const up = [flow, ...saved]; setSaved(up); persistFlows(up); setConfirmed(true);
+  }, [trade,buyInco,sellInco,stages,costInputs,overrides,activeBuckets,logTotal,fin,econ,saved,persistFlows]);
+
+  const deleteFlow = useCallback(id => { const up = saved.filter(f => f.id!==id); setSaved(up); persistFlows(up); }, [saved,persistFlows]);
+
+  const tabNames = ["Trade Setup","Incoterms","Cost Buckets","Financing","Economics","Saved Flows"];
+
+  return (
+    <div style={{ fontFamily:ff, background:CL.bg, color:CL.tx, minHeight:"100vh" }}>
+      {/* HEADER */}
+      <div style={{ background:"linear-gradient(135deg,"+CL.sf+","+CL.sa+")", borderBottom:"1px solid "+CL.bd, padding:"20px 28px", display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+        <div>
+          <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+            <div style={{ width:32, height:32, borderRadius:6, background:"linear-gradient(135deg,"+CL.ac+",#a08030)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:16, fontWeight:700, color:"#0a0f1a" }}>CZ</div>
+            <span style={{ fontSize:20, fontWeight:700, letterSpacing:"-0.02em" }}>Trade Costing Engine</span>
+          </div>
+          <div style={{ fontSize:12, color:CL.tm, marginTop:4, marginLeft:44 }}>Commodity trade pricing, financing & logistics | Internal tool v1.0</div>
+        </div>
+        <div style={{ display:"flex", gap:12, alignItems:"center" }}>
+          <Pill label={buyInco+" \u2192 "+sellInco} color={CL.ac} />
+          <Pill label={trade.volume+" MT"} color={CL.bu} />
+          {saved.length > 0 && <Pill label={saved.length+" saved"} color={CL.pu} />}
+        </div>
+      </div>
+
+      {/* TABS */}
+      <div style={{ display:"flex", background:CL.sf, borderBottom:"1px solid "+CL.bd, padding:"0 20px", overflowX:"auto" }}>
+        {tabNames.map((t,i) => (
+          <button key={t} onClick={() => setTab(i)} style={{ padding:"14px 22px", background:"none", border:"none", cursor:"pointer", color:tab===i?CL.ac:CL.td, fontFamily:ff, fontSize:13, fontWeight:tab===i?600:500, borderBottom:tab===i?"2px solid "+CL.ac:"2px solid transparent", whiteSpace:"nowrap" }}>
+            {(i+1)+". "+t}{i===5 && saved.length > 0 ? " ("+saved.length+")" : ""}
+          </button>
+        ))}
+      </div>
+
+      {/* CONTENT */}
+      <div style={{ padding:"24px 28px", maxWidth:1100, margin:"0 auto" }}>
+
+        {/* TAB 1 */}
+        {tab === 0 && (
+          <div>
+            {routeAlert && (
+              <div style={{ background:CL.bu+"12", border:"1px solid "+CL.bu+"40", borderRadius:8, padding:"14px 18px", marginBottom:20 }}>
+                <div style={{ fontSize:13, fontWeight:600, color:CL.bu, marginBottom:6 }}>Route match: {routeAlert.length} previous flow{routeAlert.length>1?"s":""} for {trade.origin} {"\u2192"} {trade.destination}</div>
+                {routeAlert.slice(0,3).map(f => (
+                  <div key={f.id} style={{ fontSize:12, color:CL.td, padding:"4px 0", display:"flex", gap:16 }}>
+                    <span style={{ color:CL.tx, fontWeight:500 }}>{f.name}</span>
+                    <span>{f.buyInco}{"\u2192"}{f.sellInco}</span>
+                    <span>Margin: ${f.margin?.toFixed(2)}/MT</span>
+                    <span>ROE: {f.roe?.toFixed(1)}%</span>
+                  </div>
+                ))}
+                <button onClick={() => setTab(5)} style={{ marginTop:8, background:CL.bud, border:"1px solid "+CL.bu+"30", borderRadius:5, padding:"5px 12px", color:CL.bu, fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:ff }}>View saved flows</button>
+              </div>
+            )}
+            <Card title="Trade Parameters" accent={CL.ac}>
+              <InputRow label="Scenario Name" value={trade.name} onChange={v => updateTrade("name",v)} placeholder="e.g. Brazil Sugar Q2" />
+              <InputRow label="Commodity" value={trade.commodity} onChange={v => updateTrade("commodity",v)} />
+              <div style={{ display:"flex", gap:20 }}>
+                <div style={{ flex:1 }}><InputRow label="Origin" value={trade.origin} onChange={v => updateTrade("origin",v)} placeholder="e.g. Santos, Brazil" small /></div>
+                <div style={{ flex:1 }}><InputRow label="Destination" value={trade.destination} onChange={v => updateTrade("destination",v)} placeholder="e.g. Felixstowe, UK" small /></div>
+              </div>
+              <div style={{ height:1, background:CL.bd, margin:"12px 0" }} />
+              <InputRow label="Volume" value={trade.volume} onChange={v => updateTrade("volume",v)} type="number" suffix="MT" />
+              <InputRow label="Purchase Price" value={trade.purchasePrice} onChange={v => updateTrade("purchasePrice",v)} type="number" suffix="$/MT" />
+              <InputRow label="Sale Price" value={trade.salePrice} onChange={v => updateTrade("salePrice",v)} type="number" suffix="$/MT" />
+              <InputRow label="Currency" value={trade.currency} onChange={v => updateTrade("currency",v)} />
+            </Card>
+            <Card title="Quick Reference">
+              <div style={{ display:"flex", gap:24 }}>
+                <Stat label="Trade Value (Buy)" value={"$"+(trade.volume*trade.purchasePrice).toLocaleString()} />
+                <Stat label="Trade Value (Sell)" value={"$"+(trade.volume*trade.salePrice).toLocaleString()} />
+                <Stat label="Gross Spread $/MT" value={"$"+(trade.salePrice-trade.purchasePrice).toFixed(2)} color={trade.salePrice>trade.purchasePrice?CL.gn:CL.rd} />
+                <Stat label="Gross Spread c/lb" value={toClb(trade.salePrice-trade.purchasePrice).toFixed(2)+" c/lb"} color={trade.salePrice>trade.purchasePrice?CL.gn:CL.rd} />
+              </div>
+            </Card>
+          </div>
+        )}
+
+        {/* TAB 2 */}
+        {tab === 1 && (
+          <div>
+            <Card title="Incoterm Selection" accent={CL.ac}>
+              <div style={{ display:"flex", gap:40, marginBottom:16 }}>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:12, color:CL.tm, marginBottom:8, textTransform:"uppercase" }}>Buy Incoterm</div>
+                  <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>{INCOTERMS.map(ic => <button key={ic} onClick={() => setBuyInco(ic)} style={{ padding:"8px 16px", borderRadius:6, border:"1px solid "+(buyInco===ic?CL.ac:CL.bd), background:buyInco===ic?CL.ad:CL.sa, color:buyInco===ic?CL.ac:CL.td, fontFamily:ff, fontSize:13, fontWeight:600, cursor:"pointer" }}>{ic}</button>)}</div>
+                </div>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:12, color:CL.tm, marginBottom:8, textTransform:"uppercase" }}>Sell Incoterm</div>
+                  <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>{INCOTERMS.map(ic => <button key={ic} onClick={() => setSellInco(ic)} style={{ padding:"8px 16px", borderRadius:6, border:"1px solid "+(sellInco===ic?CL.gn:CL.bd), background:sellInco===ic?CL.gd:CL.sa, color:sellInco===ic?CL.gn:CL.td, fontFamily:ff, fontSize:13, fontWeight:600, cursor:"pointer" }}>{ic}</button>)}</div>
+                </div>
+              </div>
+              <div style={{ fontSize:13, color:CL.td, padding:"10px 14px", background:CL.sa, borderRadius:6 }}>
+                Buy <strong style={{ color:CL.ac }}>{buyInco}</strong> / Sell <strong style={{ color:CL.gn }}>{sellInco}</strong> activates <strong style={{ color:CL.tx }}>{activeBuckets.filter(b=>b.active).length}</strong> of {COST_BUCKETS.length} cost buckets
+              </div>
+            </Card>
+            <Card title="Cost Responsibility Matrix">
+              <div style={{ overflowX:"auto" }}><table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
+                <thead><tr><th style={{ textAlign:"left", padding:"8px 10px", color:CL.tm, borderBottom:"1px solid "+CL.bd }}>Cost Bucket</th><th style={{ padding:"8px 10px", color:CL.ac, borderBottom:"1px solid "+CL.bd }}>{"BUY_"+buyInco}</th><th style={{ padding:"8px 10px", color:CL.gn, borderBottom:"1px solid "+CL.bd }}>{"SELL_"+sellInco}</th><th style={{ padding:"8px 10px", color:CL.tx, borderBottom:"1px solid "+CL.bd }}>Active</th></tr></thead>
+                <tbody>{activeBuckets.map((b,i) => <tr key={b.name} style={{ background:i%2===0?"transparent":CL.sa+"60" }}><td style={{ padding:"6px 10px", color:b.active?CL.tx:CL.tm }}>{b.name}</td><td style={{ textAlign:"center", padding:"6px 10px", color:BUY_MATRIX[buyInco][i]?CL.ac:CL.tm }}>{BUY_MATRIX[buyInco][i]?"YES":"--"}</td><td style={{ textAlign:"center", padding:"6px 10px", color:SELL_MATRIX[sellInco][i]?CL.gn:CL.tm }}>{SELL_MATRIX[sellInco][i]?"YES":"--"}</td><td style={{ textAlign:"center", padding:"6px 10px" }}>{b.active?<span style={{ background:CL.gd, color:CL.gn, padding:"2px 10px", borderRadius:10, fontSize:11, fontWeight:600 }}>ACTIVE</span>:<span style={{ color:CL.tm, fontSize:11 }}>--</span>}</td></tr>)}</tbody>
+              </table></div>
+            </Card>
+          </div>
+        )}
+
+        {/* TAB 3 */}
+        {tab === 2 && (() => {
+          const active = activeBuckets.filter(b => b.active), inactive = activeBuckets.filter(b => !b.active), oc = Object.keys(overrides).length;
+          return (
+            <div>
+              <Card title={"Active Cost Buckets ("+active.length+")"} accent={CL.gn} right={<div style={{ display:"flex", alignItems:"center", gap:14 }}>{oc > 0 && <button onClick={resetOverrides} style={{ background:CL.rdd, border:"1px solid "+CL.rd+"30", borderRadius:5, padding:"4px 10px", color:CL.rd, fontSize:11, fontWeight:600, cursor:"pointer", fontFamily:ff }}>{oc+" override"+(oc>1?"s":"")+" \u2014 Reset"}</button>}<span style={{ fontFamily:mf, fontSize:14, fontWeight:700, color:CL.ac }}>{"Total: $"+logTotal.toFixed(2)+"/MT | "+toClb(logTotal).toFixed(2)+" c/lb"}</span></div>}>
+                {active.length === 0 && <div style={{ color:CL.tm, fontSize:13 }}>No active cost buckets. Activate from Inactive section below.</div>}
+                {active.map(b => { const ci = costInputs[b.name]; return (
+                  <div key={b.name} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 0", borderBottom:"1px solid "+CL.bd+"22" }}>
+                    <button onClick={() => updateCost(b.name,"enabled",!ci.enabled)} style={{ width:20, height:20, borderRadius:4, border:"1px solid "+(ci.enabled?CL.gn:CL.bd), background:ci.enabled?CL.gd:"transparent", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:ci.enabled?CL.gn:"transparent", fontSize:13 }}>{ci.enabled?"\u2713":""}</button>
+                    <span style={{ flex:1, fontSize:13, color:ci.enabled?CL.tx:CL.tm }}>{b.name}{b.overridden && <span style={{ marginLeft:8, fontSize:10, padding:"1px 6px", borderRadius:3, background:CL.ad, color:CL.ac, fontWeight:600 }}>MANUAL</span>}</span>
+                    <input type="number" value={ci.value} onChange={e => updateCost(b.name,"value",e.target.value)} disabled={!ci.enabled} style={{ width:90, background:CL.sa, border:"1px solid "+CL.bd, borderRadius:5, padding:"6px 10px", color:ci.enabled?CL.tx:CL.tm, fontFamily:mf, fontSize:12, textAlign:"right", outline:"none", opacity:ci.enabled?1:0.4 }} />
+                    <span style={{ fontSize:11, color:CL.tm, width:40 }}>{trade.currency}/MT</span>
+                    <span style={{ fontSize:11, color:CL.tm, width:70, fontFamily:mf, textAlign:"right" }}>{toClb(parseFloat(ci.value)||0).toFixed(2)+" c/lb"}</span>
+                    {b.overridden && <button onClick={() => toggleOverride(b.name,b.matrixActive,b.active)} style={{ background:CL.rdd, border:"none", borderRadius:3, padding:"3px 7px", color:CL.rd, fontSize:10, cursor:"pointer", fontWeight:600, flexShrink:0 }}>{"\u2715"}</button>}
+                  </div>
+                ); })}
+              </Card>
+              {inactive.length > 0 && (
+                <Card title={"Inactive Buckets ("+inactive.length+")"} right={<span style={{ fontSize:11, color:CL.tm }}>Click + to manually activate</span>}>
+                  {inactive.map(b => <div key={b.name} style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 0", borderBottom:"1px solid "+CL.bd+"15" }}><button onClick={() => toggleOverride(b.name,b.matrixActive,b.active)} style={{ width:24, height:24, borderRadius:5, border:"1px dashed "+CL.bl, background:"transparent", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:CL.tm, fontSize:14 }} onMouseEnter={e=>{e.currentTarget.style.borderColor=CL.gn;e.currentTarget.style.color=CL.gn;e.currentTarget.style.background=CL.gd}} onMouseLeave={e=>{e.currentTarget.style.borderColor=CL.bl;e.currentTarget.style.color=CL.tm;e.currentTarget.style.background="transparent"}}>+</button><span style={{ fontSize:13, color:CL.tm }}>{b.name}</span></div>)}
+                </Card>
+              )}
+            </div>
+          );
+        })()}
+
+        {/* TAB 4 */}
+        {tab === 3 && (
+          <div>
+            <Card title="Global Financing Parameters" accent={CL.bu}><div style={{ display:"flex", gap:24 }}><InputRow label="Blended Bank COF" value={(bankCOF*100).toFixed(2)} onChange={v => setBankCOF((parseFloat(v)||0)/100)} type="number" suffix="%" small /><InputRow label="CZ Equity Rate" value="12.00" onChange={() => {}} type="number" suffix="% (fixed)" small /></div></Card>
+            <Card title="Financing Stages" accent={CL.ac} right={<button onClick={addStage} style={{ background:CL.ad, border:"1px solid "+CL.ac+"40", borderRadius:6, padding:"6px 14px", color:CL.ac, fontFamily:ff, fontSize:12, fontWeight:600, cursor:"pointer" }}>+ Add Stage</button>}>
+              {stages.map((s,i) => { const ft = FINANCING_TYPES.find(f => f.id === s.typeId); const c = fin.results[i]; return (
+                <div key={i} style={{ background:CL.sa, borderRadius:8, padding:16, marginBottom:12, border:"1px solid "+CL.bd }}>
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
+                    <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                      <span style={{ width:24, height:24, borderRadius:"50%", background:CL.ad, color:CL.ac, display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, fontWeight:700 }}>{i+1}</span>
+                      <select value={s.typeId} onChange={e => updateStage(i,"typeId",e.target.value)} style={{ background:CL.sf, border:"1px solid "+CL.bd, borderRadius:6, padding:"6px 10px", color:CL.tx, fontFamily:ff, fontSize:13, outline:"none" }}>{FINANCING_TYPES.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}</select>
+                    </div>
+                    <button onClick={() => removeStage(i)} style={{ background:CL.rdd, border:"none", borderRadius:4, padding:"4px 10px", color:CL.rd, fontSize:11, cursor:"pointer", fontWeight:600 }}>Remove</button>
+                  </div>
+                  <div style={{ display:"flex", gap:16, flexWrap:"wrap", fontSize:12 }}>
+                    <MiniInput label="Days" value={s.days} onChange={v => updateStage(i,"days",parseInt(v)||0)} />
+                    <MiniInput label="Advance Rate" value={s.advanceRate!==null?(s.advanceRate*100).toFixed(1):(ft?.advanceRate*100).toFixed(1)} onChange={v => updateStage(i,"advanceRate",(parseFloat(v)||0)/100)} suffix="%" />
+                    <MiniInput label="Margin" value={s.margin!==null?(s.margin*100).toFixed(2):(ft?.margin*100).toFixed(2)} onChange={v => updateStage(i,"margin",(parseFloat(v)||0)/100)} suffix="%" />
+                  </div>
+                  {c && <div style={{ display:"flex", gap:16, marginTop:12, paddingTop:10, borderTop:"1px solid "+CL.bd }}><MiniStat label="Exposure" value={"$"+c.base.toLocaleString()} /><MiniStat label="Bank Loan" value={"$"+c.bankLoan.toLocaleString()} /><MiniStat label="CZ Equity" value={"$"+c.equity.toLocaleString()} /><MiniStat label="Bank Int." value={"$"+c.bankInterest.toFixed(0)} /><MiniStat label="Eq. Cost" value={"$"+c.equityCost.toFixed(0)} /><MiniStat label="Total" value={"$"+c.totalCost.toFixed(0)} isAccent /></div>}
+                </div>
+              ); })}
+            </Card>
+            <Card title="Financing Aggregation"><div style={{ display:"flex", gap:20, flexWrap:"wrap" }}><Stat label="Lifecycle Days" value={fin.totalDays} /><Stat label="Total Fin. Cost" value={"$"+fin.totalCost.toFixed(2)} /><Stat label="Cost/MT" value={"$"+fin.costPerMt.toFixed(2)} /><Stat label="Cost c/lb" value={toClb(fin.costPerMt).toFixed(4)+" c/lb"} /><Stat label="Avg Equity %" value={(fin.avgEquityPct*100).toFixed(1)+"%"} /><Stat label="Avg CZ Equity" value={"$"+fin.avgEquity.toFixed(0)} /></div></Card>
+          </div>
+        )}
+
+        {/* TAB 5 */}
+        {tab === 4 && (() => {
+          const rows = [{l:"Commodity Cost (Purchase)",v:econ.cc},{l:"Logistics Cost",v:econ.lc},{l:"Financing Cost",v:econ.fc},{l:"Total Landed Cost",v:econ.tc,c:CL.ac,b:true,d:true},{l:"Sale Price",v:trade.salePrice},{l:"Net Margin",v:econ.mg,c:econ.mg>=0?CL.gn:CL.rd,b:true,d:true}];
+          return (
+            <div>
+              <Card title="Trade Economics Summary" accent={CL.ac}>
+                <div style={{ display:"flex", gap:16, marginBottom:20, flexWrap:"wrap" }}><SummaryCard label="Buy / Sell" value={buyInco+" \u2192 "+sellInco} /><SummaryCard label="Volume" value={trade.volume+" MT"} /><SummaryCard label="Lifecycle" value={fin.totalDays+" days"} /><SummaryCard label="Avg Equity" value={(fin.avgEquityPct*100).toFixed(1)+"%"} /></div>
+                <table style={{ width:"100%", borderCollapse:"collapse" }}><thead><tr>{["Component","$/MT","c/lb","Total USD"].map((h,i) => <th key={h} style={{ textAlign:i===0?"left":"right", padding:"8px 12px", fontSize:11, color:CL.tm, borderBottom:"1px solid "+CL.bd, textTransform:"uppercase" }}>{h}</th>)}</tr></thead>
+                <tbody>{rows.map((r,i) => <tr key={i} style={{ borderTop:r.d?"2px solid "+CL.bd:undefined }}><td style={{ padding:"10px 12px", fontSize:13, fontWeight:r.b?700:400, color:r.c||CL.tx }}>{r.l}</td><td style={{ padding:"10px 12px", fontSize:14, fontWeight:r.b?700:500, color:r.c||CL.tx, textAlign:"right", fontFamily:mf }}>{r.v.toFixed(2)}</td><td style={{ padding:"10px 12px", fontSize:13, color:r.c||CL.td, textAlign:"right", fontFamily:mf }}>{toClb(r.v).toFixed(2)}</td><td style={{ padding:"10px 12px", fontSize:13, color:r.c||CL.td, textAlign:"right", fontFamily:mf }}>{(r.v*trade.volume).toLocaleString(undefined,{maximumFractionDigits:0})}</td></tr>)}</tbody></table>
+              </Card>
+              <div style={{ display:"flex", gap:16 }}>
+                <div style={{ flex:1 }}><Card title="Return on Equity" accent={CL.gn}><div style={{ textAlign:"center", padding:"16px 0" }}><div style={{ fontSize:42, fontWeight:700, fontFamily:mf, color:econ.roe>=0?CL.gn:CL.rd }}>{econ.roe.toFixed(1)}%</div><div style={{ fontSize:12, color:CL.tm, marginTop:4 }}>Annualised ROE</div></div><div style={{ fontSize:12, color:CL.td, padding:"10px 14px", background:CL.sa, borderRadius:6, lineHeight:1.6 }}>Net profit of <strong style={{color:CL.tx}}>{"$"+(econ.mg*trade.volume).toFixed(0)}</strong> on avg equity of <strong style={{color:CL.tx}}>{"$"+fin.avgEquity.toFixed(0)}</strong> over <strong style={{color:CL.tx}}>{fin.totalDays+" days"}</strong></div></Card></div>
+                <div style={{ flex:1 }}><Card title="Cost Breakdown" accent={CL.bu}><CostBar label="Commodity" value={econ.cc} total={econ.tc} color="#60a5fa" /><CostBar label="Logistics" value={econ.lc} total={econ.tc} color={CL.ac} /><CostBar label="Financing" value={econ.fc} total={econ.tc} color={CL.pu} /></Card></div>
+              </div>
+              <div style={{ marginTop:8, padding:20, background:confirmed?CL.gd:CL.sa, border:"1px solid "+(confirmed?CL.gn+"40":CL.bd), borderRadius:10, textAlign:"center" }}>
+                {confirmed ? <div><div style={{ fontSize:16, fontWeight:700, color:CL.gn, marginBottom:6 }}>{"\u2713"} Flow confirmed and saved</div><div style={{ fontSize:12, color:CL.td }}>This scenario is stored in your Saved Flows database.</div><button onClick={() => setTab(5)} style={{ marginTop:12, background:CL.gd, border:"1px solid "+CL.gn+"30", borderRadius:6, padding:"8px 20px", color:CL.gn, fontFamily:ff, fontSize:13, fontWeight:600, cursor:"pointer" }}>View Saved Flows</button></div>
+                : <div><div style={{ fontSize:14, fontWeight:600, color:CL.tx, marginBottom:6 }}>Ready to confirm this trade flow?</div><div style={{ fontSize:12, color:CL.td, marginBottom:14 }}>Saves the full scenario to your flow database.</div><button onClick={confirmFlow} style={{ background:"linear-gradient(135deg,"+CL.ac+",#a08030)", border:"none", borderRadius:6, padding:"10px 32px", color:"#0a0f1a", fontFamily:ff, fontSize:14, fontWeight:700, cursor:"pointer" }}>Confirm & Save Flow</button></div>}
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* TAB 6 */}
+        {tab === 5 && (() => {
+          if (saved.length === 0) return <Card title="Saved Flows" accent={CL.pu}><div style={{ textAlign:"center", padding:"40px 0", color:CL.tm }}><div style={{ fontSize:14 }}>No saved flows yet</div><div style={{ fontSize:12, marginTop:4 }}>Confirm a trade scenario on the Economics tab to save it here.</div></div></Card>;
+          const hd = ["Name","Route","Inco","Commodity","Vol","Buy","Sell","Log $/MT","Fin $/MT","Margin $/MT","c/lb","Profit","ROE","Days","Date",""];
+          return (
+            <Card title={"Saved Flows Database ("+saved.length+")"} accent={CL.pu}>
+              <div style={{ overflowX:"auto" }}><table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
+                <thead><tr>{hd.map((h,i) => <th key={i} style={{ textAlign:i<4?"left":"right", padding:"8px 6px", color:CL.tm, borderBottom:"1px solid "+CL.bd, textTransform:"uppercase", fontSize:10, whiteSpace:"nowrap" }}>{h}</th>)}</tr></thead>
+                <tbody>{saved.map((f,x) => {
+                  const prof = f.totalProfit != null ? f.totalProfit : (f.margin||0) * f.volume;
+                  return (
+                    <tr key={f.id} style={{ background:x%2===0?"transparent":CL.sa+"60" }}>
+                      <td style={{ padding:"8px 6px", maxWidth:140, color:CL.tx, fontWeight:500 }}>{f.name||"Untitled"}</td>
+                      <td style={{ padding:"8px 6px", color:CL.td, whiteSpace:"nowrap", fontSize:11 }}>{f.origin}{"\u2192"}{f.destination}</td>
+                      <td style={{ padding:"8px 6px" }}><span style={{ background:CL.ad, color:CL.ac, padding:"2px 6px", borderRadius:4, fontSize:10, fontWeight:600 }}>{f.buyInco}{"\u2192"}{f.sellInco}</span></td>
+                      <td style={{ padding:"8px 6px", color:CL.td }}>{f.commodity}</td>
+                      <td style={{ padding:"8px 6px", textAlign:"right", fontFamily:mf, color:CL.td }}>{f.volume}</td>
+                      <td style={{ padding:"8px 6px", textAlign:"right", fontFamily:mf }}>{f.purchasePrice?.toFixed(0)}</td>
+                      <td style={{ padding:"8px 6px", textAlign:"right", fontFamily:mf }}>{f.salePrice?.toFixed(0)}</td>
+                      <td style={{ padding:"8px 6px", textAlign:"right", fontFamily:mf, color:CL.td }}>{f.logisticsTotal?.toFixed(2)}</td>
+                      <td style={{ padding:"8px 6px", textAlign:"right", fontFamily:mf, color:CL.td }}>{f.financingCostPerMt?.toFixed(2)}</td>
+                      <td style={{ padding:"8px 6px", textAlign:"right", fontFamily:mf, fontWeight:600, color:(f.margin||0)>=0?CL.gn:CL.rd }}>{f.margin?.toFixed(2)}</td>
+                      <td style={{ padding:"8px 6px", textAlign:"right", fontFamily:mf, fontWeight:600, color:(f.margin||0)>=0?CL.gn:CL.rd }}>{toClb(f.margin||0).toFixed(2)}</td>
+                      <td style={{ padding:"8px 6px", textAlign:"right", fontFamily:mf, fontWeight:700, color:prof>=0?CL.gn:CL.rd }}>{"$"+prof.toLocaleString(undefined,{maximumFractionDigits:0})}</td>
+                      <td style={{ padding:"8px 6px", textAlign:"right", fontFamily:mf, fontWeight:700, color:(f.roe||0)>=0?CL.gn:CL.rd }}>{f.roe?.toFixed(1)}%</td>
+                      <td style={{ padding:"8px 6px", textAlign:"right", fontFamily:mf, color:CL.td }}>{f.totalDays}</td>
+                      <td style={{ padding:"8px 6px", textAlign:"right", color:CL.tm, whiteSpace:"nowrap", fontSize:11 }}>{new Date(f.savedAt).toLocaleDateString()}</td>
+                      <td style={{ padding:"8px 6px", textAlign:"right" }}><button onClick={() => deleteFlow(f.id)} style={{ background:CL.rdd, border:"none", borderRadius:3, padding:"3px 8px", color:CL.rd, fontSize:10, cursor:"pointer", fontWeight:600 }}>{"\u2715"}</button></td>
+                    </tr>
+                  );
+                })}</tbody>
+              </table></div>
+            </Card>
+          );
+        })()}
+
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.render(React.createElement(App), document.getElementById("root"));
+</script>
+</body>
+</html>
