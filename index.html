@@ -10,6 +10,7 @@
 <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
 <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.26.5/babel.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 <style>
   *{margin:0;padding:0;box-sizing:border-box}body{background:#0a0f1a}
   input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
@@ -167,6 +168,74 @@ function App(){
   const renameFlow=useCallback(async(id,nm)=>{await db.renameFlow(id,nm);setSaved(p=>p.map(f=>f.id===id?{...f,name:nm}:f))},[]);
 
   const saveUserName=useCallback((name)=>{setUserName(name);localStorage.setItem(USER_KEY,name);setShowNamePrompt(false)},[]);
+
+  /* ── EXCEL EXPORT ── */
+  const exportFlows=useCallback(()=>{
+    if(saved.length===0)return;
+    const rows=saved.map(f=>({
+      "Name":f.name,"Created By":f.created_by,"Date":new Date(f.created_at).toLocaleDateString(),
+      "Commodity":f.commodity,"Origin":f.origin,"Destination":f.destination,
+      "Buy Incoterm":f.buy_incoterm,"Sell Incoterm":f.sell_incoterm,
+      "Volume (MT)":f.volume,"Purchase Price ($/MT)":f.purchase_price,"Sale Price ($/MT)":f.sale_price,"Currency":f.currency,
+      "Logistics ($/MT)":f.logistics_total,"Financing ($/MT)":f.financing_cost_per_mt,
+      "Total Cost ($/MT)":f.total_cost,"Margin ($/MT)":f.margin,"Margin (%)":f.margin_pct,
+      "Total Profit ($)":f.total_profit,"ROE (%)":f.roe,"Total Days":f.total_days,"Avg Equity (%)":f.avg_equity_pct
+    }));
+    const ws=XLSX.utils.json_to_sheet(rows);
+    ws["!cols"]=[{wch:25},{wch:14},{wch:12},{wch:12},{wch:18},{wch:18},{wch:12},{wch:12},{wch:12},{wch:16},{wch:14},{wch:10},{wch:14},{wch:14},{wch:14},{wch:14},{wch:10},{wch:14},{wch:10},{wch:10},{wch:12}];
+    const wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb,ws,"Saved Flows");
+    XLSX.writeFile(wb,"CZ_Trade_Flows_"+new Date().toISOString().slice(0,10)+".xlsx");
+  },[saved]);
+
+  /* ── EXCEL IMPORT ── */
+  const[importData,setImportData]=useState(null);
+  const[importing,setImporting]=useState(false);
+  const IMPORT_COLS=["name","commodity","origin","destination","volume","purchase_price","sale_price","buy_incoterm","sell_incoterm"];
+  const COL_MAP={"Name":"name","Commodity":"commodity","Origin":"origin","Destination":"destination","Volume (MT)":"volume","Volume":"volume","Purchase Price ($/MT)":"purchase_price","Purchase Price":"purchase_price","Sale Price ($/MT)":"sale_price","Sale Price":"sale_price","Buy Incoterm":"buy_incoterm","Sell Incoterm":"sell_incoterm","Currency":"currency","Logistics ($/MT)":"logistics_total","Financing ($/MT)":"financing_cost_per_mt","Total Cost ($/MT)":"total_cost","Margin ($/MT)":"margin","Margin (%)":"margin_pct","Total Profit ($)":"total_profit","ROE (%)":"roe","Total Days":"total_days","Avg Equity (%)":"avg_equity_pct","Created By":"created_by"};
+
+  const handleImportFile=useCallback((file)=>{
+    const reader=new FileReader();
+    reader.onload=(e)=>{
+      try{
+        const wb=XLSX.read(e.target.result,{type:"array"});
+        const ws=wb.Sheets[wb.SheetNames[0]];
+        const raw=XLSX.utils.sheet_to_json(ws);
+        if(!raw.length){alert("No data found in file");return}
+        const mapped=raw.map(row=>{
+          const out={created_by:userName||"anonymous",currency:"USD"};
+          Object.keys(row).forEach(k=>{const mk=COL_MAP[k]||COL_MAP[k.trim()];if(mk)out[mk]=row[k]});
+          if(!out.name)out.name=(out.commodity||"")+" "+(out.origin||"")+"\u2192"+(out.destination||"");
+          ["volume","purchase_price","sale_price","logistics_total","financing_cost_per_mt","total_cost","margin","margin_pct","total_profit","roe","total_days","avg_equity_pct"].forEach(k=>{if(out[k]!==undefined)out[k]=parseFloat(out[k])||0});
+          return out;
+        });
+        const valid=mapped.filter(r=>r.commodity&&r.origin&&r.destination&&r.volume>0&&r.buy_incoterm&&r.sell_incoterm);
+        if(!valid.length){alert("No valid rows found. Required columns: Name, Commodity, Origin, Destination, Volume, Purchase Price, Sale Price, Buy Incoterm, Sell Incoterm");return}
+        setImportData({rows:valid,skipped:mapped.length-valid.length,fileName:file.name});
+      }catch(err){alert("Error reading file: "+err.message)}
+    };
+    reader.readAsArrayBuffer(file);
+  },[userName]);
+
+  const confirmImport=useCallback(async()=>{
+    if(!importData)return;
+    setImporting(true);
+    const{data,error}=await sb.from("flows").insert(importData.rows).select();
+    if(error){alert("Import error: "+error.message);setImporting(false);return}
+    setSaved(p=>[...(data||[]),...p]);
+    setImportData(null);
+    setImporting(false);
+  },[importData]);
+
+  /* ── DOWNLOAD TEMPLATE ── */
+  const downloadTemplate=useCallback(()=>{
+    const sample=[{"Name":"Example Flow","Commodity":"Sugar","Origin":"Santos, Brazil","Destination":"Felixstowe, UK","Volume (MT)":500,"Purchase Price ($/MT)":470,"Sale Price ($/MT)":535,"Currency":"USD","Buy Incoterm":"FOB","Sell Incoterm":"CIF","Logistics ($/MT)":15,"Financing ($/MT)":2.5,"Margin ($/MT)":47.5,"ROE (%)":18.5,"Total Days":60}];
+    const ws=XLSX.utils.json_to_sheet(sample);
+    ws["!cols"]=[{wch:20},{wch:12},{wch:18},{wch:18},{wch:12},{wch:18},{wch:16},{wch:10},{wch:14},{wch:14},{wch:14},{wch:14},{wch:14},{wch:10},{wch:10}];
+    const wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb,ws,"Template");
+    XLSX.writeFile(wb,"CZ_Flow_Import_Template.xlsx");
+  },[]);
 
   const tabNames=["Trade Setup","Incoterms","Cost Buckets","Financing","Economics","Saved Flows"];
 
@@ -328,39 +397,92 @@ function App(){
 
         {/* TAB 6 */}
         {tab===5&&(()=>{
-          if(loading)return <Card title="Saved Flows" accent={CL.pu}><div style={{textAlign:"center",padding:"40px 0",color:CL.tm}}>Loading flows from database...</div></Card>;
-          if(saved.length===0)return <Card title="Saved Flows" accent={CL.pu}><div style={{textAlign:"center",padding:"40px 0",color:CL.tm}}><div style={{fontSize:14}}>No saved flows yet</div><div style={{fontSize:12,marginTop:4}}>Confirm a trade scenario on the Economics tab to save it here.</div></div></Card>;
+          if(loading) return <Card title="Saved Flows" accent={CL.pu}><div style={{textAlign:"center",padding:"40px 0",color:CL.tm}}>Loading flows from database...</div></Card>;
+
+          /* IMPORT PREVIEW */
+          if(importData) return (
+            <div>
+              <Card title={"Import Preview: "+importData.fileName} accent={CL.gn}>
+                <div style={{fontSize:13,color:CL.td,marginBottom:12}}><strong style={{color:CL.tx}}>{importData.rows.length}</strong> valid flows ready to import{importData.skipped>0&&<span> (<strong style={{color:CL.rd}}>{importData.skipped}</strong> rows skipped due to missing required fields)</span>}</div>
+                <div style={{overflowX:"auto",maxHeight:300,overflowY:"auto"}}>
+                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+                    <thead><tr>{["Name","Commodity","Origin","Destination","Vol","Buy","Sell","Inco","Margin","ROE"].map((h,i)=><th key={i} style={{textAlign:i<4?"left":"right",padding:"6px 5px",color:CL.tm,borderBottom:"1px solid "+CL.bd,fontSize:10,textTransform:"uppercase",position:"sticky",top:0,background:CL.sf}}>{h}</th>)}</tr></thead>
+                    <tbody>{importData.rows.slice(0,50).map((r,i)=>(
+                      <tr key={i} style={{background:i%2===0?"transparent":CL.sa+"60"}}>
+                        <td style={{padding:"5px",color:CL.tx,fontSize:11}}>{r.name}</td>
+                        <td style={{padding:"5px",color:CL.td,fontSize:11}}>{r.commodity}</td>
+                        <td style={{padding:"5px",color:CL.td,fontSize:11}}>{r.origin}</td>
+                        <td style={{padding:"5px",color:CL.td,fontSize:11}}>{r.destination}</td>
+                        <td style={{padding:"5px",textAlign:"right",fontFamily:mf}}>{r.volume}</td>
+                        <td style={{padding:"5px",textAlign:"right",fontFamily:mf}}>{r.purchase_price}</td>
+                        <td style={{padding:"5px",textAlign:"right",fontFamily:mf}}>{r.sale_price}</td>
+                        <td style={{padding:"5px"}}><span style={{background:CL.ad,color:CL.ac,padding:"1px 5px",borderRadius:4,fontSize:9,fontWeight:600}}>{r.buy_incoterm}{"\u2192"}{r.sell_incoterm}</span></td>
+                        <td style={{padding:"5px",textAlign:"right",fontFamily:mf,color:(r.margin||0)>=0?CL.gn:CL.rd}}>{r.margin?.toFixed?.(2)||"--"}</td>
+                        <td style={{padding:"5px",textAlign:"right",fontFamily:mf,color:(r.roe||0)>=0?CL.gn:CL.rd}}>{r.roe?.toFixed?.(1)||"--"}{r.roe?"%":""}</td>
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                  {importData.rows.length>50&&<div style={{fontSize:11,color:CL.tm,padding:8,textAlign:"center"}}>Showing first 50 of {importData.rows.length} rows</div>}
+                </div>
+                <div style={{display:"flex",gap:12,marginTop:16,justifyContent:"center"}}>
+                  <button onClick={()=>setImportData(null)} style={{background:CL.sa,border:"1px solid "+CL.bd,borderRadius:6,padding:"10px 24px",color:CL.td,fontFamily:ff,fontSize:13,fontWeight:600,cursor:"pointer"}}>Cancel</button>
+                  <button onClick={confirmImport} disabled={importing} style={{background:importing?"#555":"linear-gradient(135deg,"+CL.gn+",#22c55e)",border:"none",borderRadius:6,padding:"10px 24px",color:"#0a0f1a",fontFamily:ff,fontSize:13,fontWeight:700,cursor:importing?"default":"pointer"}}>{importing?"Importing "+importData.rows.length+" flows...":"Confirm Import ("+importData.rows.length+" flows)"}</button>
+                </div>
+              </Card>
+            </div>
+          );
+
+          /* MAIN SAVED FLOWS VIEW */
+          const btnStyle={border:"1px solid ",borderRadius:5,padding:"4px 10px",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:ff};
           const hd=["Name","By","Route","Inco","Commodity","Vol","Buy","Sell","Log","Fin","Margin","c/lb","Profit","ROE","Days","Date",""];
           return (
-            <Card title={"Saved Flows Database ("+saved.length+")"} accent={CL.pu} right={<button onClick={async()=>{setLoading(true);setSaved(await db.getFlows());setLoading(false)}} style={{background:CL.bud,border:"1px solid "+CL.bu+"30",borderRadius:5,padding:"4px 10px",color:CL.bu,fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:ff}}>Refresh</button>}>
-              <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
-                <thead><tr>{hd.map((h,i)=><th key={i} style={{textAlign:i<5?"left":"right",padding:"8px 5px",color:CL.tm,borderBottom:"1px solid "+CL.bd,textTransform:"uppercase",fontSize:9,whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead>
-                <tbody>{saved.map((f,x)=>{
-                  const prof=f.total_profit!=null?f.total_profit:(f.margin||0)*(f.volume||0);
-                  return (
-                    <tr key={f.id} style={{background:x%2===0?"transparent":CL.sa+"60"}}>
-                      <td style={{padding:"7px 5px",maxWidth:130,color:CL.tx,fontWeight:500,fontSize:11}}>{f.name||"Untitled"}</td>
-                      <td style={{padding:"7px 5px",color:CL.pu,fontSize:10,fontWeight:600}}>{f.created_by}</td>
-                      <td style={{padding:"7px 5px",color:CL.td,whiteSpace:"nowrap",fontSize:10}}>{f.origin}{"\u2192"}{f.destination}</td>
-                      <td style={{padding:"7px 5px"}}><span style={{background:CL.ad,color:CL.ac,padding:"1px 5px",borderRadius:4,fontSize:9,fontWeight:600}}>{f.buy_incoterm}{"\u2192"}{f.sell_incoterm}</span></td>
-                      <td style={{padding:"7px 5px",color:CL.td,fontSize:10}}>{f.commodity}</td>
-                      <td style={{padding:"7px 5px",textAlign:"right",fontFamily:mf,color:CL.td}}>{f.volume}</td>
-                      <td style={{padding:"7px 5px",textAlign:"right",fontFamily:mf}}>{f.purchase_price?.toFixed(0)}</td>
-                      <td style={{padding:"7px 5px",textAlign:"right",fontFamily:mf}}>{f.sale_price?.toFixed(0)}</td>
-                      <td style={{padding:"7px 5px",textAlign:"right",fontFamily:mf,color:CL.td}}>{f.logistics_total?.toFixed(2)}</td>
-                      <td style={{padding:"7px 5px",textAlign:"right",fontFamily:mf,color:CL.td}}>{f.financing_cost_per_mt?.toFixed(2)}</td>
-                      <td style={{padding:"7px 5px",textAlign:"right",fontFamily:mf,fontWeight:600,color:(f.margin||0)>=0?CL.gn:CL.rd}}>{f.margin?.toFixed(2)}</td>
-                      <td style={{padding:"7px 5px",textAlign:"right",fontFamily:mf,fontWeight:600,color:(f.margin||0)>=0?CL.gn:CL.rd}}>{toClb(f.margin||0).toFixed(2)}</td>
-                      <td style={{padding:"7px 5px",textAlign:"right",fontFamily:mf,fontWeight:700,color:prof>=0?CL.gn:CL.rd}}>{"$"+prof.toLocaleString(undefined,{maximumFractionDigits:0})}</td>
-                      <td style={{padding:"7px 5px",textAlign:"right",fontFamily:mf,fontWeight:700,color:(f.roe||0)>=0?CL.gn:CL.rd}}>{f.roe?.toFixed(1)}%</td>
-                      <td style={{padding:"7px 5px",textAlign:"right",fontFamily:mf,color:CL.td}}>{f.total_days}</td>
-                      <td style={{padding:"7px 5px",textAlign:"right",color:CL.tm,whiteSpace:"nowrap",fontSize:10}}>{new Date(f.created_at).toLocaleDateString()}</td>
-                      <td style={{padding:"7px 5px",textAlign:"right"}}><button onClick={()=>deleteFlow(f.id)} style={{background:CL.rdd,border:"none",borderRadius:3,padding:"2px 7px",color:CL.rd,fontSize:10,cursor:"pointer",fontWeight:600}}>{"\u2715"}</button></td>
-                    </tr>
-                  );
-                })}</tbody>
-              </table></div>
-            </Card>
+            <div>
+              {/* ACTION BAR */}
+              <div style={{display:"flex",gap:10,marginBottom:16,flexWrap:"wrap"}}>
+                <button onClick={exportFlows} disabled={saved.length===0} style={{...btnStyle,background:CL.gd,borderColor:CL.gn+"40",color:CL.gn,opacity:saved.length?1:0.4}}>Export to Excel ({saved.length})</button>
+                <label style={{...btnStyle,background:CL.bud,borderColor:CL.bu+"40",color:CL.bu,display:"inline-flex",alignItems:"center",gap:6}}>
+                  Import from Excel
+                  <input type="file" accept=".xlsx,.xls,.csv" onChange={e=>{if(e.target.files[0])handleImportFile(e.target.files[0]);e.target.value=""}} style={{display:"none"}}/>
+                </label>
+                <button onClick={downloadTemplate} style={{...btnStyle,background:CL.sa,borderColor:CL.bd,color:CL.td}}>Download Template</button>
+                <div style={{flex:1}}/>
+                <button onClick={async()=>{setLoading(true);setSaved(await db.getFlows());setLoading(false)}} style={{...btnStyle,background:CL.bud,borderColor:CL.bu+"30",color:CL.bu}}>Refresh</button>
+              </div>
+
+              {saved.length===0?
+                <Card title="Saved Flows" accent={CL.pu}><div style={{textAlign:"center",padding:"40px 0",color:CL.tm}}><div style={{fontSize:14}}>No saved flows yet</div><div style={{fontSize:12,marginTop:4}}>Confirm a trade scenario on the Economics tab, or import flows from Excel.</div></div></Card>
+              :
+                <Card title={"Saved Flows Database ("+saved.length+")"} accent={CL.pu}>
+                  <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+                    <thead><tr>{hd.map((h,i)=><th key={i} style={{textAlign:i<5?"left":"right",padding:"8px 5px",color:CL.tm,borderBottom:"1px solid "+CL.bd,textTransform:"uppercase",fontSize:9,whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead>
+                    <tbody>{saved.map((f,x)=>{
+                      const prof=f.total_profit!=null?f.total_profit:(f.margin||0)*(f.volume||0);
+                      return (
+                        <tr key={f.id} style={{background:x%2===0?"transparent":CL.sa+"60"}}>
+                          <td style={{padding:"7px 5px",maxWidth:130,color:CL.tx,fontWeight:500,fontSize:11}}>{f.name||"Untitled"}</td>
+                          <td style={{padding:"7px 5px",color:CL.pu,fontSize:10,fontWeight:600}}>{f.created_by}</td>
+                          <td style={{padding:"7px 5px",color:CL.td,whiteSpace:"nowrap",fontSize:10}}>{f.origin}{"\u2192"}{f.destination}</td>
+                          <td style={{padding:"7px 5px"}}><span style={{background:CL.ad,color:CL.ac,padding:"1px 5px",borderRadius:4,fontSize:9,fontWeight:600}}>{f.buy_incoterm}{"\u2192"}{f.sell_incoterm}</span></td>
+                          <td style={{padding:"7px 5px",color:CL.td,fontSize:10}}>{f.commodity}</td>
+                          <td style={{padding:"7px 5px",textAlign:"right",fontFamily:mf,color:CL.td}}>{f.volume}</td>
+                          <td style={{padding:"7px 5px",textAlign:"right",fontFamily:mf}}>{f.purchase_price?.toFixed(0)}</td>
+                          <td style={{padding:"7px 5px",textAlign:"right",fontFamily:mf}}>{f.sale_price?.toFixed(0)}</td>
+                          <td style={{padding:"7px 5px",textAlign:"right",fontFamily:mf,color:CL.td}}>{f.logistics_total?.toFixed(2)}</td>
+                          <td style={{padding:"7px 5px",textAlign:"right",fontFamily:mf,color:CL.td}}>{f.financing_cost_per_mt?.toFixed(2)}</td>
+                          <td style={{padding:"7px 5px",textAlign:"right",fontFamily:mf,fontWeight:600,color:(f.margin||0)>=0?CL.gn:CL.rd}}>{f.margin?.toFixed(2)}</td>
+                          <td style={{padding:"7px 5px",textAlign:"right",fontFamily:mf,fontWeight:600,color:(f.margin||0)>=0?CL.gn:CL.rd}}>{toClb(f.margin||0).toFixed(2)}</td>
+                          <td style={{padding:"7px 5px",textAlign:"right",fontFamily:mf,fontWeight:700,color:prof>=0?CL.gn:CL.rd}}>{"$"+prof.toLocaleString(undefined,{maximumFractionDigits:0})}</td>
+                          <td style={{padding:"7px 5px",textAlign:"right",fontFamily:mf,fontWeight:700,color:(f.roe||0)>=0?CL.gn:CL.rd}}>{f.roe?.toFixed(1)}%</td>
+                          <td style={{padding:"7px 5px",textAlign:"right",fontFamily:mf,color:CL.td}}>{f.total_days}</td>
+                          <td style={{padding:"7px 5px",textAlign:"right",color:CL.tm,whiteSpace:"nowrap",fontSize:10}}>{new Date(f.created_at).toLocaleDateString()}</td>
+                          <td style={{padding:"7px 5px",textAlign:"right"}}><button onClick={()=>deleteFlow(f.id)} style={{background:CL.rdd,border:"none",borderRadius:3,padding:"2px 7px",color:CL.rd,fontSize:10,cursor:"pointer",fontWeight:600}}>{"\u2715"}</button></td>
+                        </tr>
+                      );
+                    })}</tbody>
+                  </table></div>
+                </Card>
+              }
+            </div>
           );
         })()}
 
