@@ -71,6 +71,8 @@ const toClb=v=>(v/2204.62)*100;
 const CL={bg:"#0a0f1a",sf:"#111827",sa:"#1a2234",bd:"#1e2d44",bl:"#2a3a54",ac:"#c9a55a",ad:"rgba(201,165,90,0.15)",tx:"#e2e8f0",td:"#8494a7",tm:"#5a6a7e",gn:"#4ade80",gd:"rgba(74,222,128,0.12)",rd:"#f87171",rdd:"rgba(248,113,113,0.12)",bu:"#60a5fa",bud:"rgba(96,165,250,0.1)",pu:"#a78bfa"};
 const ff="'DM Sans','Segoe UI',sans-serif",mf="'JetBrains Mono',monospace";
 const USER_KEY="cz-user-name";
+const AUTH_KEY="cz-auth";
+const APP_PASSWORD="CZ1234";
 
 /* ── UI ATOMS ── */
 function Pill({label,color}){return <span style={{display:"inline-block",padding:"4px 12px",borderRadius:20,background:color+"18",color,fontSize:12,fontWeight:600,border:"1px solid "+color+"30"}}>{label}</span>}
@@ -84,9 +86,12 @@ function CostBar({label,value,total,color}){const p=total>0?(value/total)*100:0;
 
 /* ── MAIN APP ── */
 function App(){
+  const[authed,setAuthed]=useState(false);
+  const[pwInput,setPwInput]=useState("");
+  const[pwError,setPwError]=useState(false);
   const[tab,setTab]=useState(0);
-  const[userName,setUserName]=useState(()=>localStorage.getItem(USER_KEY)||"");
-  const[showNamePrompt,setShowNamePrompt]=useState(()=>!localStorage.getItem(USER_KEY));
+  const[userName,setUserName]=useState("");
+  const[showNamePrompt,setShowNamePrompt]=useState(true);
   const[trade,setTrade]=useState({name:"",commodity:"Sugar",origin:"",destination:"",volume:500,purchasePrice:470,salePrice:535,currency:"USD"});
   const[buyInco,setBuyInco]=useState("EXW");
   const[sellInco,setSellInco]=useState("CIF");
@@ -167,7 +172,7 @@ function App(){
   const deleteFlow=useCallback(async(id)=>{await db.deleteFlow(id);setSaved(p=>p.filter(f=>f.id!==id))},[]);
   const renameFlow=useCallback(async(id,nm)=>{await db.renameFlow(id,nm);setSaved(p=>p.map(f=>f.id===id?{...f,name:nm}:f))},[]);
 
-  const saveUserName=useCallback((name)=>{setUserName(name);localStorage.setItem(USER_KEY,name);setShowNamePrompt(false)},[]);
+  const saveUserName=useCallback((name)=>{setUserName(name);setShowNamePrompt(false)},[]);
 
   /* ── EXCEL EXPORT ── */
   const exportFlows=useCallback(()=>{
@@ -209,8 +214,21 @@ function App(){
           ["volume","purchase_price","sale_price","logistics_total","financing_cost_per_mt","total_cost","margin","margin_pct","total_profit","roe","total_days","avg_equity_pct"].forEach(k=>{if(out[k]!==undefined)out[k]=parseFloat(out[k])||0});
           return out;
         });
-        const valid=mapped.filter(r=>r.commodity&&r.origin&&r.destination&&r.volume>0&&r.buy_incoterm&&r.sell_incoterm);
-        if(!valid.length){alert("No valid rows found. Required columns: Name, Commodity, Origin, Destination, Volume, Purchase Price, Sale Price, Buy Incoterm, Sell Incoterm");return}
+        const valid=mapped.filter(r=>{
+          const hasData=Object.keys(r).some(k=>k!=="created_by"&&k!=="currency"&&r[k]!==undefined&&r[k]!==""&&r[k]!==0);
+          if(!hasData)return false;
+          if(!r.name)r.name=(r.commodity||"Import")+" "+(r.origin||"")+"\u2192"+(r.destination||"");
+          if(!r.commodity)r.commodity="--";
+          if(!r.origin)r.origin="--";
+          if(!r.destination)r.destination="--";
+          if(!r.buy_incoterm)r.buy_incoterm="--";
+          if(!r.sell_incoterm)r.sell_incoterm="--";
+          if(!r.volume)r.volume=0;
+          if(!r.purchase_price)r.purchase_price=0;
+          if(!r.sale_price)r.sale_price=0;
+          return true;
+        });
+        if(!valid.length){alert("No rows with data found in the file.");return}
         setImportData({rows:valid,skipped:mapped.length-valid.length,fileName:file.name});
       }catch(err){alert("Error reading file: "+err.message)}
     };
@@ -220,9 +238,28 @@ function App(){
   const confirmImport=useCallback(async()=>{
     if(!importData)return;
     setImporting(true);
-    const{data,error}=await sb.from("flows").insert(importData.rows).select();
+    // Fetch existing flows to check for duplicates
+    const existing=await db.getFlows();
+    const isDuplicate=(row)=>existing.some(e=>
+      (e.commodity||"").toLowerCase()===(row.commodity||"").toLowerCase()&&
+      (e.origin||"").toLowerCase()===(row.origin||"").toLowerCase()&&
+      (e.destination||"").toLowerCase()===(row.destination||"").toLowerCase()&&
+      Number(e.volume)===Number(row.volume)&&
+      Number(e.purchase_price)===Number(row.purchase_price)&&
+      Number(e.sale_price)===Number(row.sale_price)&&
+      (e.buy_incoterm||"").toLowerCase()===(row.buy_incoterm||"").toLowerCase()&&
+      (e.sell_incoterm||"").toLowerCase()===(row.sell_incoterm||"").toLowerCase()
+    );
+    const fresh=importData.rows.filter(r=>!isDuplicate(r));
+    const dupeCount=importData.rows.length-fresh.length;
+    if(fresh.length===0){
+      alert("All "+importData.rows.length+" rows already exist in the database. Nothing to import.");
+      setImporting(false);return;
+    }
+    const{data,error}=await sb.from("flows").insert(fresh).select();
     if(error){alert("Import error: "+error.message);setImporting(false);return}
     setSaved(p=>[...(data||[]),...p]);
+    if(dupeCount>0)alert("Imported "+fresh.length+" new flows. Skipped "+dupeCount+" duplicate"+(dupeCount>1?"s":"")+" that already exist.");
     setImportData(null);
     setImporting(false);
   },[importData]);
@@ -238,6 +275,37 @@ function App(){
   },[]);
 
   const tabNames=["Trade Setup","Incoterms","Cost Buckets","Financing","Economics","Saved Flows"];
+
+  /* ── PASSWORD GATE ── */
+  if(!authed){
+    const tryPassword=()=>{
+      if(pwInput===APP_PASSWORD){
+        setAuthed(true);
+        setPwError(false);
+      }else{
+        setPwError(true);
+      }
+    };
+    return (
+      <div style={{fontFamily:ff,background:CL.bg,color:CL.tx,minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center"}}>
+        <div style={{background:CL.sf,border:"1px solid "+CL.bd,borderRadius:12,padding:40,maxWidth:420,width:"100%",textAlign:"center"}}>
+          <div style={{width:48,height:48,borderRadius:10,background:"linear-gradient(135deg,"+CL.ac+",#a08030)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,fontWeight:700,color:"#0a0f1a",margin:"0 auto 16px"}}>CZ</div>
+          <div style={{fontSize:20,fontWeight:700,marginBottom:4}}>Trade Costing Engine</div>
+          <div style={{fontSize:13,color:CL.td,marginBottom:24}}>Internal access only</div>
+          <input
+            type="password" placeholder="Enter access password" autoFocus
+            value={pwInput} onChange={e=>{setPwInput(e.target.value);setPwError(false)}}
+            onKeyDown={e=>{if(e.key==="Enter")tryPassword()}}
+            style={{width:"100%",background:CL.sa,border:"1px solid "+(pwError?CL.rd:CL.bd),borderRadius:8,padding:"12px 16px",color:CL.tx,fontFamily:ff,fontSize:15,outline:"none",marginBottom:8,textAlign:"center"}}
+          />
+          {pwError&&<div style={{fontSize:12,color:CL.rd,marginBottom:8}}>Incorrect password</div>}
+          <button onClick={tryPassword} style={{width:"100%",background:"linear-gradient(135deg,"+CL.ac+",#a08030)",border:"none",borderRadius:8,padding:"12px",color:"#0a0f1a",fontFamily:ff,fontSize:15,fontWeight:700,cursor:"pointer",marginTop:8}}>
+            Access Dashboard
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   /* ── NAME PROMPT ── */
   if(showNamePrompt){
