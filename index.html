@@ -177,17 +177,39 @@ function App(){
   /* ── EXCEL EXPORT ── */
   const exportFlows=useCallback(()=>{
     if(saved.length===0)return;
-    const rows=saved.map(f=>({
-      "Name":f.name,"Created By":f.created_by,"Date":new Date(f.created_at).toLocaleDateString(),
-      "Commodity":f.commodity,"Origin":f.origin,"Destination":f.destination,
-      "Buy Incoterm":f.buy_incoterm,"Sell Incoterm":f.sell_incoterm,
-      "Volume (MT)":f.volume,"Purchase Price ($/MT)":f.purchase_price,"Sale Price ($/MT)":f.sale_price,"Currency":f.currency,
-      "Logistics ($/MT)":f.logistics_total,"Financing ($/MT)":f.financing_cost_per_mt,
-      "Total Cost ($/MT)":f.total_cost,"Margin ($/MT)":f.margin,"Margin (%)":f.margin_pct,
-      "Total Profit ($)":f.total_profit,"ROE (%)":f.roe,"Total Days":f.total_days,"Avg Equity (%)":f.avg_equity_pct
-    }));
+    // Collect all unique cost bucket names across all flows
+    const allBuckets=new Set();
+    saved.forEach(f=>{if(f.cost_inputs&&typeof f.cost_inputs==="object"){Object.keys(f.cost_inputs).forEach(k=>allBuckets.add(k))}});
+    const bucketList=[...allBuckets].sort();
+
+    const rows=saved.map(f=>{
+      const row={
+        "Name":f.name,"Created By":f.created_by,"Date":new Date(f.created_at).toLocaleDateString(),
+        "Commodity":f.commodity,"Origin":f.origin,"Destination":f.destination,
+        "Buy Incoterm":f.buy_incoterm,"Sell Incoterm":f.sell_incoterm,
+        "Volume (MT)":f.volume,"Purchase Price ($/MT)":f.purchase_price,"Sale Price ($/MT)":f.sale_price,"Currency":f.currency,
+        "Logistics Total ($/MT)":f.logistics_total
+      };
+      // Add individual cost bucket columns
+      bucketList.forEach(b=>{
+        const ci=f.cost_inputs&&f.cost_inputs[b];
+        row["[Cost] "+b]=ci?(parseFloat(ci.value)||0):0;
+      });
+      // Add remaining summary columns
+      row["Financing ($/MT)"]=f.financing_cost_per_mt;
+      row["Total Cost ($/MT)"]=f.total_cost;
+      row["Margin ($/MT)"]=f.margin;
+      row["Margin (%)"]=f.margin_pct;
+      row["Total Profit ($)"]=f.total_profit;
+      row["ROE (%)"]=f.roe;
+      row["Total Days"]=f.total_days;
+      row["Avg Equity (%)"]=f.avg_equity_pct;
+      return row;
+    });
     const ws=XLSX.utils.json_to_sheet(rows);
-    ws["!cols"]=[{wch:25},{wch:14},{wch:12},{wch:12},{wch:18},{wch:18},{wch:12},{wch:12},{wch:12},{wch:16},{wch:14},{wch:10},{wch:14},{wch:14},{wch:14},{wch:14},{wch:10},{wch:14},{wch:10},{wch:10},{wch:12}];
+    // Auto-size columns
+    const colCount=Object.keys(rows[0]||{}).length;
+    ws["!cols"]=Array.from({length:colCount},(_,i)=>({wch:i<13?16:20}));
     const wb=XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb,ws,"Saved Flows");
     XLSX.writeFile(wb,"CZ_Trade_Flows_"+new Date().toISOString().slice(0,10)+".xlsx");
