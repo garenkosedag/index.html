@@ -22,12 +22,12 @@
 <div id="root"></div>
 <script type="text/babel">
 const{useState,useMemo,useCallback,useEffect}=React;
-
+ 
 /* ── SUPABASE ── */
 const SUPA_URL="https://lqfukfzgxmchqrlxudxt.supabase.co";
 const SUPA_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxxZnVrZnpneG1jaHFybHh1ZHh0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM4NjAzNTEsImV4cCI6MjA4OTQzNjM1MX0.21E-GFQjS7BtILg0zqKqGC-Vaf-Z9qbHUDlCV8UpIiw";
 const sb=window.supabase.createClient(SUPA_URL,SUPA_KEY);
-
+ 
 const db={
   async getFlows(){
     const{data,error}=await sb.from("flows").select("*").order("created_at",{ascending:false});
@@ -48,7 +48,7 @@ const db={
     if(error)console.error("DB rename error:",error);
   }
 };
-
+ 
 /* ── DATA ── */
 const COST_BUCKETS=["Origin Haulage","Origin Handling","Export Customs Clearance","Export Documentation","Port Terminal Charges (Origin)","Ocean Freight","Marine Insurance","Import Customs Clearance","Import Duty","Import Tariff","Destination Port Charges","Destination Inland Haulage","Destination Handling","Last Mile Delivery","Warehouse Handling","Storage (per period)","Inventory Carrying Cost","Pallet / Packaging","Border Charges","Brokerage / Agency","Inspection / Certification","Miscellaneous Logistics Cost"];
 const INCOTERMS=["EXW","FCA","FOB","CIF","DAP","DDP","VMI"];
@@ -73,7 +73,7 @@ const ff="'DM Sans','Segoe UI',sans-serif",mf="'JetBrains Mono',monospace";
 const USER_KEY="cz-user-name";
 const AUTH_KEY="cz-auth";
 const APP_PASSWORD="CZ1234";
-
+ 
 /* ── UI ATOMS ── */
 function Pill({label,color}){return <span style={{display:"inline-block",padding:"4px 12px",borderRadius:20,background:color+"18",color,fontSize:12,fontWeight:600,border:"1px solid "+color+"30"}}>{label}</span>}
 function Card({title,children,accent,right}){return <div style={{background:CL.sf,border:"1px solid "+CL.bd,borderRadius:10,marginBottom:20,overflow:"hidden"}}>{title&&<div style={{padding:"14px 20px",borderBottom:"1px solid "+CL.bd,display:"flex",justifyContent:"space-between",alignItems:"center",background:accent?accent+"08":undefined,borderLeft:accent?"3px solid "+accent:undefined}}><span style={{fontWeight:600,fontSize:14,color:accent||CL.tx}}>{title}</span>{right}</div>}<div style={{padding:"16px 20px"}}>{children}</div></div>}
@@ -83,7 +83,7 @@ function MiniInput({label,value,onChange,suffix}){return <div><div style={{fontS
 function MiniStat({label,value,isAccent}){return <div style={{flex:1}}><div style={{fontSize:10,color:CL.tm,textTransform:"uppercase",letterSpacing:"0.04em"}}>{label}</div><div style={{fontSize:13,fontWeight:600,color:isAccent?CL.ac:CL.tx,fontFamily:mf,marginTop:2}}>{value}</div></div>}
 function SummaryCard({label,value}){return <div style={{flex:1,minWidth:120,padding:"12px 16px",background:CL.sa,borderRadius:8,border:"1px solid "+CL.bd}}><div style={{fontSize:10,color:CL.tm,textTransform:"uppercase",letterSpacing:"0.05em"}}>{label}</div><div style={{fontSize:16,fontWeight:700,marginTop:4,fontFamily:mf}}>{value}</div></div>}
 function CostBar({label,value,total,color}){const p=total>0?(value/total)*100:0;return <div style={{marginBottom:12}}><div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:4}}><span style={{color:CL.td}}>{label}</span><span style={{fontFamily:mf,color:CL.tx}}>{"$"+value.toFixed(2)+" ("+p.toFixed(1)+"%)"}</span></div><div style={{height:6,background:CL.sa,borderRadius:3,overflow:"hidden"}}><div style={{height:"100%",width:Math.min(p,100)+"%",background:color,borderRadius:3,transition:"width 0.4s ease"}}/></div></div>}
-
+ 
 /* ── MAIN APP ── */
 function App(){
   const[authed,setAuthed]=useState(false);
@@ -104,10 +104,10 @@ function App(){
   const[confirmed,setConfirmed]=useState(false);
   const[loading,setLoading]=useState(true);
   const[saving,setSaving]=useState(false);
-
+ 
   // Load flows from Supabase on mount
   useEffect(()=>{(async()=>{setLoading(true);const flows=await db.getFlows();setSaved(flows);setLoading(false)})()},[]);
-
+ 
   // Route matching
   useEffect(()=>{
     if(!trade.origin.trim()||!trade.destination.trim()){setRouteAlert(null);return}
@@ -115,19 +115,19 @@ function App(){
     const m=saved.filter(f=>f.origin?.toLowerCase()===o&&f.destination?.toLowerCase()===d);
     setRouteAlert(m.length>0?m:null);
   },[trade.origin,trade.destination,saved]);
-
+ 
   useEffect(()=>{setConfirmed(false)},[trade,buyInco,sellInco,costInputs,stages,bankCOF,overrides]);
-
+ 
   const activeBuckets=useMemo(()=>{
     const bC=BUY_MATRIX[buyInco],sC=SELL_MATRIX[sellInco];
     return COST_BUCKETS.map((name,i)=>{const ma=bC[i]===1&&sC[i]===1;const ov=overrides[name];const active=ov!==undefined?ov:ma;return{name,active,matrixActive:ma,overridden:ov!==undefined&&ov!==ma}});
   },[buyInco,sellInco,overrides]);
-
+ 
   const toggleOverride=useCallback((name,ma,ca)=>{setOverrides(p=>{const n={...p};const ns=!ca;if(ns===ma)delete n[name];else n[name]=ns;return n})},[]);
   const resetOverrides=useCallback(()=>setOverrides({}),[]);
-
+ 
   const logTotal=useMemo(()=>activeBuckets.reduce((s,b)=>b.active&&costInputs[b.name]?.enabled?s+(parseFloat(costInputs[b.name]?.value)||0):s,0),[activeBuckets,costInputs]);
-
+ 
   const fin=useMemo(()=>{
     const results=stages.map(s=>{const ft=FINANCING_TYPES.find(f=>f.id===s.typeId);if(!ft)return null;const ar=s.advanceRate!==null?s.advanceRate:ft.advanceRate;const mg=s.margin!==null?s.margin:ft.margin;const cof=s.cof!==null?s.cof:bankCOF;const base=ft.usesSalePrice?trade.volume*trade.salePrice:trade.volume*trade.purchasePrice;const bl=base*ar,eq=base*(1-ar);const air=ft.isClean?EQUITY_RATE:mg+cof;const bi=bl*air*s.days/360,ec=eq*EQUITY_RATE*s.days/360;return{...s,ft,ar,mg,cof,base,bankLoan:bl,equity:eq,allInRate:air,bankInterest:bi,equityCost:ec,totalCost:bi+ec,days:s.days}}).filter(Boolean);
     const td=results.reduce((a,r)=>a+r.days,0),tc=results.reduce((a,r)=>a+r.totalCost,0);
@@ -135,20 +135,20 @@ function App(){
     const ae=td>0?results.reduce((a,r)=>a+r.days*r.equity,0)/td:0;
     return{results,totalDays:td,totalCost:tc,avgEquityPct:aep,avgEquity:ae,costPerMt:trade.volume>0?tc/trade.volume:0};
   },[stages,trade,bankCOF]);
-
+ 
   const econ=useMemo(()=>{
     const cc=trade.purchasePrice,lc=logTotal,fc=fin.costPerMt,tc=cc+lc+fc;
     const mg=trade.salePrice-tc,mp=trade.salePrice>0?mg/trade.salePrice*100:0,tp=mg*trade.volume;
     const roe=fin.avgEquity>0&&fin.totalDays>0?(tp-fin.totalCost)/fin.avgEquity/fin.totalDays*360*100:0;
     return{cc,lc,fc,tc,mg,mp,tp,roe};
   },[trade,logTotal,fin]);
-
+ 
   const updateTrade=useCallback((k,v)=>setTrade(p=>({...p,[k]:v})),[]);
   const updateCost=useCallback((n,f,v)=>setCostInputs(p=>({...p,[n]:{...p[n],[f]:v}})),[]);
   const addStage=useCallback(()=>setStages(p=>[...p,{typeId:"own_equity",days:10,advanceRate:null,margin:null,cof:null}]),[]);
   const removeStage=useCallback(i=>setStages(p=>p.filter((_,x)=>x!==i)),[]);
   const updateStage=useCallback((i,f,v)=>setStages(p=>p.map((s,x)=>x===i?{...s,[f]:v}:s)),[]);
-
+ 
   const confirmFlow=useCallback(async()=>{
     setSaving(true);
     const flow={
@@ -168,12 +168,12 @@ function App(){
     if(result){setSaved(p=>[result,...p]);setConfirmed(true)}
     setSaving(false);
   },[trade,buyInco,sellInco,stages,costInputs,overrides,activeBuckets,logTotal,fin,econ,userName]);
-
+ 
   const deleteFlow=useCallback(async(id)=>{await db.deleteFlow(id);setSaved(p=>p.filter(f=>f.id!==id))},[]);
   const renameFlow=useCallback(async(id,nm)=>{await db.renameFlow(id,nm);setSaved(p=>p.map(f=>f.id===id?{...f,name:nm}:f))},[]);
-
+ 
   const saveUserName=useCallback((name)=>{setUserName(name);setShowNamePrompt(false)},[]);
-
+ 
   /* ── EXCEL EXPORT ── */
   const exportFlows=useCallback(()=>{
     if(saved.length===0)return;
@@ -181,7 +181,7 @@ function App(){
     const allBuckets=new Set();
     saved.forEach(f=>{if(f.cost_inputs&&typeof f.cost_inputs==="object"){Object.keys(f.cost_inputs).forEach(k=>allBuckets.add(k))}});
     const bucketList=[...allBuckets].sort();
-
+ 
     const rows=saved.map(f=>{
       const row={
         "Name":f.name,"Created By":f.created_by,"Date":new Date(f.created_at).toLocaleDateString(),
@@ -214,13 +214,13 @@ function App(){
     XLSX.utils.book_append_sheet(wb,ws,"Saved Flows");
     XLSX.writeFile(wb,"CZ_Trade_Flows_"+new Date().toISOString().slice(0,10)+".xlsx");
   },[saved]);
-
+ 
   /* ── EXCEL IMPORT ── */
   const[importData,setImportData]=useState(null);
   const[importing,setImporting]=useState(false);
   const IMPORT_COLS=["name","commodity","origin","destination","volume","purchase_price","sale_price","buy_incoterm","sell_incoterm"];
   const COL_MAP={"Name":"name","Commodity":"commodity","Origin":"origin","Destination":"destination","Volume (MT)":"volume","Volume":"volume","Purchase Price ($/MT)":"purchase_price","Purchase Price":"purchase_price","Sale Price ($/MT)":"sale_price","Sale Price":"sale_price","Buy Incoterm":"buy_incoterm","Sell Incoterm":"sell_incoterm","Currency":"currency","Logistics ($/MT)":"logistics_total","Financing ($/MT)":"financing_cost_per_mt","Total Cost ($/MT)":"total_cost","Margin ($/MT)":"margin","Margin (%)":"margin_pct","Total Profit ($)":"total_profit","ROE (%)":"roe","Total Days":"total_days","Avg Equity (%)":"avg_equity_pct","Created By":"created_by"};
-
+ 
   const handleImportFile=useCallback((file)=>{
     const reader=new FileReader();
     reader.onload=(e)=>{
@@ -256,7 +256,7 @@ function App(){
     };
     reader.readAsArrayBuffer(file);
   },[userName]);
-
+ 
   const confirmImport=useCallback(async()=>{
     if(!importData)return;
     setImporting(true);
@@ -285,7 +285,7 @@ function App(){
     setImportData(null);
     setImporting(false);
   },[importData]);
-
+ 
   /* ── DOWNLOAD TEMPLATE ── */
   const downloadTemplate=useCallback(()=>{
     const sample=[{"Name":"Example Flow","Commodity":"Sugar","Origin":"Santos, Brazil","Destination":"Felixstowe, UK","Volume (MT)":500,"Purchase Price ($/MT)":470,"Sale Price ($/MT)":535,"Currency":"USD","Buy Incoterm":"FOB","Sell Incoterm":"CIF","Logistics ($/MT)":15,"Financing ($/MT)":2.5,"Margin ($/MT)":47.5,"ROE (%)":18.5,"Total Days":60}];
@@ -295,9 +295,9 @@ function App(){
     XLSX.utils.book_append_sheet(wb,ws,"Template");
     XLSX.writeFile(wb,"CZ_Flow_Import_Template.xlsx");
   },[]);
-
+ 
   const tabNames=["Trade Setup","Incoterms","Cost Buckets","Financing","Economics","Saved Flows"];
-
+ 
   /* ── PASSWORD GATE ── */
   if(!authed){
     const tryPassword=()=>{
@@ -328,7 +328,7 @@ function App(){
       </div>
     );
   }
-
+ 
   /* ── NAME PROMPT ── */
   if(showNamePrompt){
     return (
@@ -350,7 +350,7 @@ function App(){
       </div>
     );
   }
-
+ 
   /* ── MAIN RENDER ── */
   return (
     <div style={{fontFamily:ff,background:CL.bg,color:CL.tx,minHeight:"100vh"}}>
@@ -369,7 +369,7 @@ function App(){
           {saved.length>0&&<Pill label={saved.length+" flows"} color={CL.pu}/>}
         </div>
       </div>
-
+ 
       {/* TABS */}
       <div style={{display:"flex",background:CL.sf,borderBottom:"1px solid "+CL.bd,padding:"0 20px",overflowX:"auto"}}>
         {tabNames.map((t,i)=>(
@@ -378,10 +378,10 @@ function App(){
           </button>
         ))}
       </div>
-
+ 
       {/* CONTENT */}
       <div style={{padding:"24px 28px",maxWidth:1100,margin:"0 auto"}}>
-
+ 
         {/* TAB 1 */}
         {tab===0&&(
           <div>
@@ -405,7 +405,7 @@ function App(){
             <Card title="Quick Reference"><div style={{display:"flex",gap:24}}><Stat label="Trade Value (Buy)" value={"$"+(trade.volume*trade.purchasePrice).toLocaleString()}/><Stat label="Trade Value (Sell)" value={"$"+(trade.volume*trade.salePrice).toLocaleString()}/><Stat label="Gross Spread $/MT" value={"$"+(trade.salePrice-trade.purchasePrice).toFixed(2)} color={trade.salePrice>trade.purchasePrice?CL.gn:CL.rd}/><Stat label="Gross Spread c/lb" value={toClb(trade.salePrice-trade.purchasePrice).toFixed(2)+" c/lb"} color={trade.salePrice>trade.purchasePrice?CL.gn:CL.rd}/></div></Card>
           </div>
         )}
-
+ 
         {/* TAB 2 */}
         {tab===1&&(
           <div>
@@ -419,7 +419,7 @@ function App(){
             <Card title="Cost Responsibility Matrix"><div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}><thead><tr><th style={{textAlign:"left",padding:"8px 10px",color:CL.tm,borderBottom:"1px solid "+CL.bd}}>Cost Bucket</th><th style={{padding:"8px 10px",color:CL.ac,borderBottom:"1px solid "+CL.bd}}>{"BUY_"+buyInco}</th><th style={{padding:"8px 10px",color:CL.gn,borderBottom:"1px solid "+CL.bd}}>{"SELL_"+sellInco}</th><th style={{padding:"8px 10px",color:CL.tx,borderBottom:"1px solid "+CL.bd}}>Active</th></tr></thead><tbody>{activeBuckets.map((b,i)=><tr key={b.name} style={{background:i%2===0?"transparent":CL.sa+"60"}}><td style={{padding:"6px 10px",color:b.active?CL.tx:CL.tm}}>{b.name}</td><td style={{textAlign:"center",padding:"6px 10px",color:BUY_MATRIX[buyInco][i]?CL.ac:CL.tm}}>{BUY_MATRIX[buyInco][i]?"YES":"--"}</td><td style={{textAlign:"center",padding:"6px 10px",color:SELL_MATRIX[sellInco][i]?CL.gn:CL.tm}}>{SELL_MATRIX[sellInco][i]?"YES":"--"}</td><td style={{textAlign:"center",padding:"6px 10px"}}>{b.active?<span style={{background:CL.gd,color:CL.gn,padding:"2px 10px",borderRadius:10,fontSize:11,fontWeight:600}}>ACTIVE</span>:<span style={{color:CL.tm,fontSize:11}}>--</span>}</td></tr>)}</tbody></table></div></Card>
           </div>
         )}
-
+ 
         {/* TAB 3 */}
         {tab===2&&(()=>{
           const active=activeBuckets.filter(b=>b.active),inactive=activeBuckets.filter(b=>!b.active),oc=Object.keys(overrides).length;
@@ -442,7 +442,7 @@ function App(){
             </div>
           );
         })()}
-
+ 
         {/* TAB 4 */}
         {tab===3&&(
           <div>
@@ -462,7 +462,7 @@ function App(){
             <Card title="Financing Aggregation"><div style={{display:"flex",gap:20,flexWrap:"wrap"}}><Stat label="Lifecycle Days" value={fin.totalDays}/><Stat label="Total Fin. Cost" value={"$"+fin.totalCost.toFixed(2)}/><Stat label="Cost/MT" value={"$"+fin.costPerMt.toFixed(2)}/><Stat label="Cost c/lb" value={toClb(fin.costPerMt).toFixed(4)+" c/lb"}/><Stat label="Avg Equity %" value={(fin.avgEquityPct*100).toFixed(1)+"%"}/><Stat label="Avg CZ Equity" value={"$"+fin.avgEquity.toFixed(0)}/></div></Card>
           </div>
         )}
-
+ 
         {/* TAB 5 */}
         {tab===4&&(()=>{
           const rows=[{l:"Commodity Cost (Purchase)",v:econ.cc},{l:"Logistics Cost",v:econ.lc},{l:"Financing Cost",v:econ.fc},{l:"Total Landed Cost",v:econ.tc,c:CL.ac,b:true,d:true},{l:"Sale Price",v:trade.salePrice},{l:"Net Margin",v:econ.mg,c:econ.mg>=0?CL.gn:CL.rd,b:true,d:true}];
@@ -484,11 +484,11 @@ function App(){
             </div>
           );
         })()}
-
+ 
         {/* TAB 6 */}
         {tab===5&&(()=>{
           if(loading) return <Card title="Saved Flows" accent={CL.pu}><div style={{textAlign:"center",padding:"40px 0",color:CL.tm}}>Loading flows from database...</div></Card>;
-
+ 
           /* IMPORT PREVIEW */
           if(importData) return (
             <div>
@@ -521,7 +521,7 @@ function App(){
               </Card>
             </div>
           );
-
+ 
           /* MAIN SAVED FLOWS VIEW */
           const btnStyle={border:"1px solid ",borderRadius:5,padding:"4px 10px",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:ff};
           const hd=["Name","By","Route","Inco","Commodity","Vol","Buy","Sell","Log","Fin","Margin","c/lb","Profit","ROE","Days","Date",""];
@@ -538,7 +538,7 @@ function App(){
                 <div style={{flex:1}}/>
                 <button onClick={async()=>{setLoading(true);setSaved(await db.getFlows());setLoading(false)}} style={{...btnStyle,background:CL.bud,borderColor:CL.bu+"30",color:CL.bu}}>Refresh</button>
               </div>
-
+ 
               {saved.length===0?
                 <Card title="Saved Flows" accent={CL.pu}><div style={{textAlign:"center",padding:"40px 0",color:CL.tm}}><div style={{fontSize:14}}>No saved flows yet</div><div style={{fontSize:12,marginTop:4}}>Confirm a trade scenario on the Economics tab, or import flows from Excel.</div></div></Card>
               :
@@ -575,12 +575,12 @@ function App(){
             </div>
           );
         })()}
-
+ 
       </div>
     </div>
   );
 }
-
+ 
 ReactDOM.render(React.createElement(App),document.getElementById("root"));
 </script>
 </body>
